@@ -1,1 +1,1 @@
-This is the code for Anomaly Detection on Attribute Graph.
+This is the code for Anomaly Detection on Attribute Graph. Our code is derived from improvements to the GRDATE \footnote{https://github.com/FelixDJC/GRADATE}. The injected anomalies into these datasets for evaluation are sourced from the CoLA\footnote{https://github.com/TrustAGI-Lab/CoLA}.
