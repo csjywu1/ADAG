@@ -194,8 +194,8 @@ if __name__ == '__main__':
                 NCE_loss = torch.mean(NCE_loss)
 
                 # logits_1
-                logits_2 = logits_1[cur_batch_size:2 * cur_batch_size]  # 提取索引区间 [300:600]
-                logits_3 = logits_1[2 * cur_batch_size:3 * cur_batch_size]  # 提取索引区间 [600:900]
+                logits_2 = logits_1[cur_batch_size:2 * cur_batch_size]  
+                logits_3 = logits_1[2 * cur_batch_size:3 * cur_batch_size] 
                 logits_1[cur_batch_size:2 * cur_batch_size] = 0 * logits_2 + 1 * logits_3
                 logits_1 = logits_1[:2*cur_batch_size]
                 loss_all_1 = b_xent_context(logits_1, lbl_context)
@@ -213,7 +213,7 @@ if __name__ == '__main__':
                 # loss_2 = torch.mean(loss_all_2)
                 # loss_2_hat = torch.mean(loss_all_2_hat)
 
-                # WU: 加上contrast_loss
+                # add contrast_loss
                 R_s, delta_s = generate_reference_scores()
                 dev_1 = (logits_1 - R_s) / delta_s
                 dev_1_hat = (logits_1_hat - R_s) / delta_s
@@ -223,17 +223,14 @@ if __name__ == '__main__':
                                                                                                    min=0)
 
                 # Contrast loss for logits_1_hat
-                # 使用相同的方法计算logits_1_hat的对比损失
                 contrast_loss_1_hat = (1 - lbl_context) * torch.abs(dev_1_hat) + lbl_context * torch.clamp(
                     m - torch.abs(dev_1_hat), min=0)
 
                 # Calculate the mean of the contrast losses
                 contrast_loss_1 = torch.mean(contrast_loss_1)
-                # contrast_loss_2 = torch.mean(contrast_loss_2)
                 contrast_loss_1_hat = torch.mean(contrast_loss_1_hat)
 
                 loss_1 = args.alpha * loss_1 + (1 - args.alpha) * loss_1_hat #node-subgraph contrast loss
-                # loss_2 = args.alpha * loss_2 + (1 - args.alpha) * loss_2_hat #node-node contrast loss
                 loss = loss_1 + 0.1 * NCE_loss + contrast_loss_1 + contrast_loss_1_hat #total loss
 
                 loss.backward()
@@ -258,91 +255,3 @@ if __name__ == '__main__':
                 break
 
             print('Epoch:{} Loss:{:.8f}'.format(epoch, mean_loss), flush=True)
-
-        # Testing
-        print('Loading {}th epoch'.format(best_t), flush=True)
-        model.load_state_dict(torch.load('{}.pkl'.format(args.dataset)))
-        multi_round_ano_score = np.zeros((args.auc_test_rounds, nb_nodes))
-        print('Testing AUC!', flush=True)
-
-        with tqdm(total=args.auc_test_rounds) as pbar_test:
-            pbar_test.set_description('Testing')
-            for round in range(args.auc_test_rounds):
-                all_idx = list(range(nb_nodes))
-                random.shuffle(all_idx)
-                subgraphs = generate_rwr_subgraph(dgl_graph, subgraph_size)
-                for batch_idx in range(batch_num):
-                    optimiser.zero_grad()
-                    is_final_batch = (batch_idx == (batch_num - 1))
-                    if not is_final_batch:
-                        idx = all_idx[batch_idx * batch_size: (batch_idx + 1) * batch_size]
-                    else:
-                        idx = all_idx[batch_idx * batch_size:]
-                    cur_batch_size = len(idx)
-                    ba = []
-                    ba_hat = []
-                    bf = []
-                    added_adj_zero_row = torch.zeros((cur_batch_size, 1, subgraph_size)).to(device)
-                    added_adj_zero_col = torch.zeros((cur_batch_size, subgraph_size + 1, 1)).to(device)
-                    added_adj_zero_col[:, -1, :] = 1.
-                    added_feat_zero_row = torch.zeros((cur_batch_size, 1, ft_size)).to(device)
-                    for i in idx:
-                        cur_adj = adj[:, subgraphs[i], :][:, :, subgraphs[i]]
-                        cur_adj_hat = adj_hat[:, subgraphs[i], :][:, :, subgraphs[i]]
-                        cur_feat = features[:, subgraphs[i], :]
-                        ba.append(cur_adj)
-                        ba_hat.append(cur_adj_hat)
-                        bf.append(cur_feat)
-
-                    ba = torch.cat(ba)
-                    ba = torch.cat((ba, added_adj_zero_row), dim=1)
-                    ba = torch.cat((ba, added_adj_zero_col), dim=2)
-                    ba_hat = torch.cat(ba_hat)
-                    ba_hat = torch.cat((ba_hat, added_adj_zero_row), dim=1)
-                    ba_hat = torch.cat((ba_hat, added_adj_zero_col), dim=2)
-                    bf = torch.cat(bf)
-                    bf = torch.cat((bf[:, :-1, :], added_feat_zero_row, bf[:, -1:, :]), dim=1)
-
-                    with torch.no_grad():
-                        test_logits_1, test_logits_2, _, _ = model(bf, ba)
-                        test_logits_1_hat, test_logits_2_hat, _, _ = model(bf, ba_hat)
-                        test_logits_1 = torch.sigmoid(torch.squeeze(test_logits_1))
-                        test_logits_2 = torch.sigmoid(torch.squeeze(test_logits_2))
-                        test_logits_1_hat = torch.sigmoid(torch.squeeze(test_logits_1_hat))
-                        test_logits_2_hat = torch.sigmoid(torch.squeeze(test_logits_2_hat))
-
-                        logits_2 = test_logits_1[cur_batch_size:2 * cur_batch_size]  # 提取索引区间 [300:600]
-                        logits_3 = test_logits_1[2 * cur_batch_size:3 * cur_batch_size]  # 提取索引区间 [600:900]
-                        test_logits_1[cur_batch_size:2 * cur_batch_size] = 0 * logits_2 + 1 * logits_3
-                        test_logits_1 = test_logits_1[:2 * cur_batch_size]
-
-                        logits_2_hat = test_logits_1_hat[cur_batch_size:2 * cur_batch_size]  # 提取索引区间 [300:600]
-                        logits_3_hat = test_logits_1_hat[2 * cur_batch_size:3 * cur_batch_size]  # 提取索引区间 [600:900]
-                        test_logits_1_hat[cur_batch_size:2 * cur_batch_size] = 0 * logits_2_hat + 1 * logits_3_hat
-                        test_logits_1_hat = test_logits_1_hat[:2 * cur_batch_size]
-
-                        ano_score_1 = - (test_logits_1[:cur_batch_size] -  test_logits_1[cur_batch_size:2 * cur_batch_size]).cpu().numpy()
-
-                        ano_score_1_hat = - (test_logits_1_hat[:cur_batch_size] - test_logits_1_hat[cur_batch_size:2 * cur_batch_size] ).cpu().numpy()
-
-                        # ano_score_2 = - (test_logits_2[:cur_batch_size] - torch.mean(test_logits_2[cur_batch_size:].view(
-                        #     cur_batch_size, args.negsamp_ratio_patch), dim=1)).cpu().numpy()
-                        # ano_score_2_hat = - (
-                        #             test_logits_2_hat[:cur_batch_size] - torch.mean(test_logits_2_hat[cur_batch_size:].view(
-                        #         cur_batch_size, args.negsamp_ratio_patch), dim=1)).cpu().numpy()
-                        ano_score = args.beta * (args.alpha * ano_score_1 + (1 - args.alpha) * ano_score_1_hat)
-
-                    multi_round_ano_score[round, idx] = ano_score
-
-                pbar_test.update(1)
-
-            ano_score_final = np.mean(multi_round_ano_score, axis=0) + np.std(multi_round_ano_score, axis=0)
-            auc = roc_auc_score(ano_label, ano_score_final)
-            all_auc.append(auc)
-            print('Testing AUC:{:.4f}'.format(auc), flush=True)
-
-
-    print('\n==============================')
-    print(all_auc)
-    print('FINAL TESTING AUC:{:.4f}'.format(np.mean(all_auc)))
-    print('==============================')
