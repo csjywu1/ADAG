@@ -189,14 +189,13 @@ class Model(nn.Module):
             h_unano = h_2[:, -1, :]
             h_ano = h_2[:, -2, :]
 
-            noise = self.single_noise.expand(h_1.size(0), -1)  # [300, 64]
+            noise = self.single_noise.expand(h_1.size(0), -1)
 
-            processed_noise = self.mlp_noise(noise)  # [300, 64]
+            processed_noise = self.mlp_noise(noise)
+            combined = c + processed_noise
 
-            combined = c + processed_noise  # [300, 64]
-
-            concatenated = torch.cat((combined, c), dim=1)  # [300, 128]
-            combined_reduced = self.mlp_combine(concatenated)  # [300, 64]
+            concatenated = torch.cat((combined, c), dim=1)
+            combined_reduced = self.mlp_combine(concatenated)
 
             c2 = combined_reduced
         else:
