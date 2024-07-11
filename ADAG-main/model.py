@@ -8,7 +8,7 @@ class MLP(nn.Module):
         self.fc = nn.Linear(input_dim, output_dim)
 
     def forward(self, x):
-        return self.fc(x.clone())  # 使用 clone 避免就地操作
+        return self.fc(x.clone()) 
 
 class SimpleMLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim):
@@ -172,10 +172,8 @@ class Model(nn.Module):
 
         self.mlp_combine = SimpleMLP(input_dim=2 * args.embedding_dim, hidden_dim=args.embedding_dim,
                                      output_dim=args.embedding_dim)
-        # 定义可优化的噪声向量
         self.single_noise = nn.Parameter(torch.randn(1, args.embedding_dim))  # [1, 64]
 
-        # 新的MLP模块用于降维
         self.mlp_combine = SimpleMLP(input_dim=2 * args.embedding_dim, hidden_dim=args.embedding_dim,
                                      output_dim=args.embedding_dim)
         self.mlp_noise = MLP(args.embedding_dim, args.embedding_dim)
@@ -196,17 +194,12 @@ class Model(nn.Module):
 
             processed_noise = self.mlp_noise(noise)  # [300, 64]
 
-            # 将processed_noise乘以权重0.1后加到c上
             combined = c + processed_noise  # [300, 64]
 
-            # 拼接combined和c，得到[300, 128]
             concatenated = torch.cat((combined, c), dim=1)  # [300, 128]
-
-            # 使用MLP将维度降到64
             combined_reduced = self.mlp_combine(concatenated)  # [300, 64]
 
             c2 = combined_reduced
-            #
         else:
             c = self.read(h_1[:, :-1, :], h_1[:, -2:-1, :])
             h_mv = h_1[:, -1, :]
