@@ -189,7 +189,6 @@ class Model(nn.Module):
             h_unano = h_2[:, -1, :]
             h_ano = h_2[:, -2, :]
 
-            # WU: 加入噪声
             noise = self.single_noise.expand(h_1.size(0), -1)  # [300, 64]
 
             processed_noise = self.mlp_noise(noise)  # [300, 64]
