@@ -76,57 +76,12 @@ if __name__ == '__main__':
     print("Data Loaded Successfully")
     print(f"Number of Nodes: {nb_nodes}, Feature Size: {ft_size}, Number of Classes: {nb_classes}")
 
-    # 初始化模型
-    input_dim = ft_size  # 输入特征维度
-    hidden_dim = 128  # MLP隐藏层维度
-    output_dim = 64  # MLP输出维度
 
 
     # 输入节点的feature # 用deepwalk的训练得到初始化embedding得到结构特征
     # 假设DeepWalkWithFeatures类已经定义好了
     # Use from_numpy_array instead of from_numpy_matrix
     G = nx.from_numpy_array(adj[0].cpu().numpy())
-
-    ##使用GNNmodel补全这里的代码
-    # 定义 GCN 模型类
-    class GCNLayer(nn.Module):
-        def __init__(self, in_features, out_features):
-            super(GCNLayer, self).__init__()
-            self.linear = nn.Linear(in_features, out_features)
-
-        def forward(self, x, adj):
-            out = torch.spmm(adj, x)  # 图卷积操作
-            out = self.linear(out)  # 线性变换
-            return out
-
-
-    class GCN(nn.Module):
-        def __init__(self, input_dim, hidden_dim, output_dim):
-            super(GCN, self).__init__()
-            self.gcn1 = GCNLayer(input_dim, hidden_dim)
-            self.gcn2 = GCNLayer(hidden_dim, output_dim)
-
-        def forward(self, x, adj, return_hidden=False):
-            # 第一层 GCN，输出隐藏层的 embedding
-            x = self.gcn1(x, adj)
-            x_hidden = F.relu(x)  # 隐藏层输出 (隐层有 128 维度)
-
-            # 如果只想输出隐藏层嵌入
-            if return_hidden:
-                return x_hidden
-
-            # 第二层 GCN，输出最终分类结果
-            x = self.gcn2(x_hidden, adj)
-            return x
-
-
-    # 初始化 GCN 模型
-    input_dim = features.shape[1]  # 输入特征的维度
-    hidden_dim = 128  # 隐藏层维度
-    output_dim = 6  # 输出维度为6，因为我们有6个类别
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    gnn_model = GCN(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim).to(device)
 
 
     # 对邻接矩阵进行归一化
@@ -141,12 +96,6 @@ if __name__ == '__main__':
 
     adj_normalized = normalize_adj(torch.tensor(adj[0].cpu().numpy()).to(device))
 
-    # 定义优化器和损失函数
-    optimizer = optim.Adam(gnn_model.parameters(), lr=0.01)
-    criterion = nn.CrossEntropyLoss()  # 交叉熵损失
-
-    # 假设 `labels` 是一个包含每个节点的类别标签的张量，shape 为 (nb_nodes,)
-    labels = labels.to(device)  # 确保 labels 张量是长整型，并且位于正确的设备上
 
 
     def save_embeddings(embeddings, filename='line_embedding.pkl'):
@@ -176,9 +125,12 @@ if __name__ == '__main__':
 
     adag_model = ADAG(input_dim=node_embeddings_tensor.shape[1], hidden_dim=128, output_dim=128).to(device)
 
+    optimiser = torch.optim.Adam(adag_model.parameters(), lr=0.001, weight_decay=0.0)
+    b_xent_context = nn.BCEWithLogitsLoss(reduction='none')
+
     # 将 node_embeddings_tensor 赋值给 features，并确保它不参与训练
     adag_model.features = node_embeddings_tensor.to(device)
-    adag_model.features.requires_grad = False
+    # adag_model.features.requires_grad = False
 
     # 初始化 embeddings 为与 node_embeddings_tensor 大小相同的可训练参数
     adag_model.embeddings = torch.nn.Parameter(torch.Tensor(node_embeddings_tensor.size()).to(device))
@@ -205,19 +157,74 @@ if __name__ == '__main__':
     neighbors_dict = get_similarity_neighbors(node_embeddings_tensor, top_k=100)
 
 
-    def generate_subgraph(root_node, neighbors_dict, max_nodes=7, max_hops=3, restart_prob=0.4):
+    # def generate_subgraph(root_node, neighbors_dict, max_nodes=5, max_hops=3, restart_prob=0.4):
+    #     """ 从 root_node 开始构建子图，使用DFS，确保子图的联通性，并避免重复使用节点作为新的根节点 """
+    #     G = nx.Graph()
+    #     G.add_node(root_node)
+    #
+    #     # 使用栈实现DFS，元素是 (当前节点, 当前跳数, 当前路径)
+    #     stack = [(root_node, 0, [root_node])]  # 栈的初始值为根节点，初始跳数为0
+    #     visited = set([root_node])  # 已经访问的节点，避免重复添加
+    #
+    #     while stack and len(G.nodes) < max_nodes:
+    #         current_node, current_hop, path = stack.pop()  # 从栈中取出一个节点、跳数和路径
+    #
+    #         # print(f"访问节点: {current_node}, 当前路径: {path}")  # 输出当前访问的节点和路径，调试用
+    #
+    #         # 检查跳数是否超过最大深度
+    #         if current_hop >= max_hops:
+    #             continue
+    #
+    #         # 获取当前节点的邻居
+    #         neighbors = neighbors_dict.get(current_node, [])
+    #
+    #         for neighbor in neighbors:
+    #             # 如果邻居节点没有访问过并且不是当前节点
+    #             if neighbor not in visited and neighbor != current_node:
+    #                 visited.add(neighbor)  # 标记该节点已访问
+    #                 G.add_edge(current_node, neighbor)  # 添加边 (current_node, neighbor)
+    #
+    #                 # 更新路径
+    #                 new_path = path + [neighbor]
+    #
+    #                 # 确保子图的联通性，达到最大节点数则返回
+    #                 if len(G.nodes) >= max_nodes:
+    #                     return G  # 返回已达到最大节点数的子图
+    #
+    #                 # 如果没有触发restart条件，则继续深搜
+    #                 if np.random.rand() > restart_prob:
+    #                     stack.append((neighbor, current_hop + 1, new_path))  # 将邻居节点与新的跳数加入栈中
+    #
+    #                     # 获取邻居的邻居
+    #                     neighbor_neighbors = neighbors_dict.get(neighbor, [])
+    #                     for nn in neighbor_neighbors:
+    #                         # 确保邻居的邻居没有访问过，且避免跳回原节点或循环
+    #                         if nn not in visited and nn != current_node and nn != neighbor and len(G.nodes) < max_nodes:
+    #                             stack.append((nn, current_hop + 2, new_path + [nn]))  # 将nn加入栈中
+    #                             G.add_edge(neighbor, nn)  # 添加边 (neighbor, nn)
+    #
+    #                             if len(G.nodes) >= max_nodes:  # 如果子图已经达到最大节点数，则立即返回
+    #                                 return G
+    #
+    #     # 如果子图的节点数量不足 max_nodes，则随机增加一些节点
+    #     while len(G.nodes) < max_nodes:
+    #         existing_nodes = list(G.nodes)
+    #         node_to_add = np.random.choice(existing_nodes)  # 随机选择已有的节点
+    #         G.add_node(node_to_add)
+    #
+    #     return G  # 只返回生成的子图
+
+    def generate_rwr_subgraph(root_node, neighbors_dict, max_nodes=5, max_hops=3, restart_prob=0.4):
         """ 从 root_node 开始构建子图，使用DFS，确保子图的联通性，并避免重复使用节点作为新的根节点 """
         G = nx.Graph()
         G.add_node(root_node)
 
-        # 使用栈实现DFS，元素是 (当前节点, 当前跳数, 当前路径)
-        stack = [(root_node, 0, [root_node])]  # 栈的初始值为根节点，初始跳数为0
+        # 使用栈实现DFS，元素是 (当前节点, 当前跳数)
+        stack = [(root_node, 0)]  # 栈的初始值为根节点，初始跳数为0
         visited = set([root_node])  # 已经访问的节点，避免重复添加
 
         while stack and len(G.nodes) < max_nodes:
-            current_node, current_hop, path = stack.pop()  # 从栈中取出一个节点、跳数和路径
-
-            # print(f"访问节点: {current_node}, 当前路径: {path}")  # 输出当前访问的节点和路径，调试用
+            current_node, current_hop = stack.pop()  # 从栈中取出一个节点和跳数
 
             # 检查跳数是否超过最大深度
             if current_hop >= max_hops:
@@ -228,12 +235,9 @@ if __name__ == '__main__':
 
             for neighbor in neighbors:
                 # 如果邻居节点没有访问过并且不是当前节点
-                if neighbor not in visited and neighbor != current_node:
+                if neighbor not in visited:
                     visited.add(neighbor)  # 标记该节点已访问
                     G.add_edge(current_node, neighbor)  # 添加边 (current_node, neighbor)
-
-                    # 更新路径
-                    new_path = path + [neighbor]
 
                     # 确保子图的联通性，达到最大节点数则返回
                     if len(G.nodes) >= max_nodes:
@@ -241,18 +245,7 @@ if __name__ == '__main__':
 
                     # 如果没有触发restart条件，则继续深搜
                     if np.random.rand() > restart_prob:
-                        stack.append((neighbor, current_hop + 1, new_path))  # 将邻居节点与新的跳数加入栈中
-
-                        # 获取邻居的邻居
-                        neighbor_neighbors = neighbors_dict.get(neighbor, [])
-                        for nn in neighbor_neighbors:
-                            # 确保邻居的邻居没有访问过，且避免跳回原节点或循环
-                            if nn not in visited and nn != current_node and nn != neighbor and len(G.nodes) < max_nodes:
-                                stack.append((nn, current_hop + 2, new_path + [nn]))  # 将nn加入栈中
-                                G.add_edge(neighbor, nn)  # 添加边 (neighbor, nn)
-
-                                if len(G.nodes) >= max_nodes:  # 如果子图已经达到最大节点数，则立即返回
-                                    return G
+                        stack.append((neighbor, current_hop + 1))  # 将邻居节点与新的跳数加入栈中
 
         # 如果子图的节点数量不足 max_nodes，则随机增加一些节点
         while len(G.nodes) < max_nodes:
@@ -265,10 +258,10 @@ if __name__ == '__main__':
 
     def generate_negative_samples(G, root_node, neighbors_dict, structure_embeddings, attribute_embeddings,
                                   max_nodes=10):
-        """ 生成两个恶意子图，恶意子图1使用结构特征，恶意子图2使用属性特征 """
+        """ 生成两个恶意子图，恶意子图1仅包含恶意节点，恶意子图2使用属性特征生成 """
 
-        # --- 构建恶意子图1 使用结构特征 ---
-        malicious_subgraph1 = G.copy()
+        # --- 构建恶意子图1，只保留恶意节点 ---
+        malicious_node1 = None
 
         # 获取根节点的结构特征嵌入
         root_structure_embedding = structure_embeddings[root_node].unsqueeze(0)  # 保持张量形状 (1, -1)
@@ -280,20 +273,38 @@ if __name__ == '__main__':
         sorted_indices = torch.argsort(similarity_scores, descending=True)
         sorted_indices = sorted_indices[sorted_indices != root_node]
 
-        # 遍历相似度最高的节点，选择一个与根节点没有连接的节点，作为恶意节点
-        malicious_node1 = None
-        for node in sorted_indices.cpu().numpy():
+        # 随机选择 top 30 中的一个节点作为恶意节点，先取前 30 个节点
+        top_30_indices = sorted_indices[:30]
+        random_top_30 = random.sample(list(top_30_indices.cpu().numpy()), len(top_30_indices))
+
+        # 遍历相似度最高的前 30 个节点，选择一个与根节点没有连接的节点作为恶意节点
+        for node in random_top_30:
             if node not in G.neighbors(root_node):
                 malicious_node1 = node
                 break
 
-        # 如果找到符合条件的恶意节点，加入到恶意子图1中
-        if malicious_node1 is not None:
-            malicious_subgraph1.add_node(malicious_node1)
-            malicious_subgraph1.add_edge(root_node, malicious_node1)
+        # 如果遍历结束后还未找到合适的恶意节点，则随机选择一个与根节点没有连接的节点
+        if malicious_node1 is None:
+            all_nodes = list(G.nodes)
+            random.shuffle(all_nodes)
+
+            for node in all_nodes:
+                if node != root_node and node not in G.neighbors(root_node):
+                    malicious_node1 = node
+                    break
+
+        # 如果仍未找到恶意节点，抛出异常
+        if malicious_node1 is None:
+            raise ValueError(f"无法找到与根节点 {root_node} 不相连的恶意节点。")
+
+        # 确保恶意节点与根节点未连接
+        assert malicious_node1 not in G.neighbors(
+            root_node), f"恶意节点 {malicious_node1} 与根节点 {root_node} 不应连接！"
+
+        # 仅返回恶意节点，而不生成图
+        malicious_subgraph1 = malicious_node1
 
         # --- 构建恶意子图2 使用属性特征 ---
-        # --- 构建恶意子图2，尝试在子图范围内添加一条不存在的边 ---
         malicious_subgraph2 = G.copy()
 
         # 获取子图中的所有节点
@@ -302,7 +313,7 @@ if __name__ == '__main__':
         # 检查子图中所有可能的边对，并选择一条不存在的边
         added_edge = False
 
-        for _ in range(len(subgraph_nodes) ** 2):  # 尝试多次，确保找到一个合适的未连接的边
+        for _ in range(len(subgraph_nodes) ** 2):
             # 随机选择两个不同的节点
             node1, node2 = random.sample(subgraph_nodes, 2)
 
@@ -311,10 +322,6 @@ if __name__ == '__main__':
                 malicious_subgraph2.add_edge(node1, node2)
                 added_edge = True
                 break
-
-        # 如果在所有尝试中都没有找到一个合适的边，使用 malicious_subgraph1 替代 malicious_subgraph2
-        if not added_edge:
-            malicious_subgraph2 = malicious_subgraph1.copy()
 
         return malicious_subgraph1, malicious_subgraph2
 
@@ -336,70 +343,61 @@ if __name__ == '__main__':
     # 定义 compute_loss 函数
     # 定义 compute_loss 函数
     # 定义 compute_loss 函数
-    def compute_loss(positive_score_structure, positive_score_attribute, malicious_score1, malicious_score2):
-        # 将score转换为一维
-        positive_score_structure = positive_score_structure.squeeze()
-        positive_score_attribute = positive_score_attribute.squeeze()
-        malicious_score1 = malicious_score1.squeeze()
-        malicious_score2 = malicious_score2.squeeze()
+    def generate_reference_scores(k=100, mu=0.0, sigma=1.0):
+        sampled_scores = torch.normal(mean=mu, std=sigma, size=(k,))
+        reference_score = torch.mean(sampled_scores)
+        deviation_std = torch.std(sampled_scores)
+        return reference_score, deviation_std
 
-        # 确保转换为一维
-        positive_score_structure = positive_score_structure.unsqueeze(
-            0) if positive_score_structure.dim() == 0 else positive_score_structure
-        positive_score_attribute = positive_score_attribute.unsqueeze(
-            0) if positive_score_attribute.dim() == 0 else positive_score_attribute
-        malicious_score1 = malicious_score1.unsqueeze(0) if malicious_score1.dim() == 0 else malicious_score1
-        malicious_score2 = malicious_score2.unsqueeze(0) if malicious_score2.dim() == 0 else malicious_score2
+    R_s, delta_s = generate_reference_scores()
 
-        # --- 1. Margin-based Loss ---
-        # 计算结构特征的 margin loss
-        margin_loss1_structure = F.relu(1-(malicious_score1 - positive_score_structure ))
-        margin_loss_structure = margin_loss1_structure  # 结构损失
 
-        # 计算属性特征的 margin loss
-        margin_loss2_attribute = F.relu(1-(malicious_score2 - positive_score_attribute ))
-        margin_loss_attribute = margin_loss2_attribute  # 语义损失
+    def compute_loss(pool_score, noise_pool_score, root_score, noise_root_score, malicious_score,
+                     pool_score1, noise_pool_score1, root_score1, pooled_node_score1, malicious_score1):
+        # --- 1. 使用 pool_score, noise_pool_score, root_score, noise_root_score, malicious_score 计算交叉熵损失 ---
 
-        # 总的 margin loss
-        total_margin_loss = margin_loss_structure.mean() + margin_loss_attribute.mean()
+        # 定义正样本和恶意样本的标签，假设正样本为 1，恶意样本为 0
+        labels = torch.cat([torch.ones_like(pool_score), torch.zeros_like(noise_pool_score),
+                            torch.ones_like(root_score), torch.zeros_like(noise_root_score),
+                            torch.zeros_like(malicious_score)])
 
-        # --- 2. Cross-Entropy Loss ---
-        # 定义标签，正样本为1，恶意样本为0
-        labels = torch.cat([torch.zeros_like(positive_score_structure), torch.ones_like(malicious_score1)])
-        # 将正样本和恶意样本分数合并
-        scores = torch.cat([positive_score_structure, malicious_score1])
+        # 将所有分数合并
+        scores = torch.cat([pool_score, noise_pool_score, root_score, noise_root_score, malicious_score])
+        scores_1_hat = torch.cat([pool_score1, noise_pool_score1, root_score1, pooled_node_score1, malicious_score1])
 
         # 使用交叉熵损失
-        cross_entropy_loss_structure = F.binary_cross_entropy_with_logits(scores, labels)
+        cross_entropy_loss = b_xent_context(scores, labels)
+        cross_entropy_loss1 = b_xent_context(scores_1_hat, labels)
 
-        # 对属性特征进行相同的处理
-        labels_attribute = torch.cat([torch.zeros_like(positive_score_attribute), torch.ones_like(malicious_score2)])
-        scores_attribute = torch.cat([positive_score_attribute, malicious_score2])
-        cross_entropy_loss_attribute = F.binary_cross_entropy_with_logits(scores_attribute, labels_attribute)
+        # --- 打印各部分的损失值（调试用） ---
+        print(f"Cross Entropy Loss: {torch.mean(cross_entropy_loss).item()}")  # 取均值
 
-        # 总的交叉熵损失
-        total_cross_entropy_loss = cross_entropy_loss_structure + cross_entropy_loss_attribute
+        # contrasting loss
+        dev_1 = (scores - R_s) / delta_s
+        dev_1_hat = (scores_1_hat - R_s) / delta_s
 
-        # --- 总损失 ---
-        total_loss =  total_cross_entropy_loss
+        m = 1
+        contrast_loss_1 = (1 - (1 - labels)) * torch.abs(dev_1) + (1 - labels) * torch.clamp(m - torch.abs(dev_1),
+                                                                                             min=0)
+        contrast_loss_1_hat = (1 - (1 - labels)) * torch.abs(dev_1_hat) + (1 - labels) * torch.clamp(
+            m - torch.abs(dev_1_hat), min=0)
 
-        # total_margin_loss +
-        # 输出各个部分的损失值
-        print(f"Cross Entropy Loss (Structure): {cross_entropy_loss_structure.item()}")
-        print(f"Cross Entropy Loss (Attribute): {cross_entropy_loss_attribute.item()}")
-        print(f"Total Cross Entropy Loss: {total_cross_entropy_loss.item()}")
-        print(f"Total Margin Loss: {total_margin_loss.item()}")
-        print(f"Total Loss: {total_loss.item()}")
+        # 计算对比损失的均值
+        contrast_loss_1 = torch.mean(contrast_loss_1)
+        contrast_loss_1_hat = torch.mean(contrast_loss_1_hat)
 
+        # 返回总损失
+        total_loss = 0.1 *(contrast_loss_1 + contrast_loss_1_hat) + torch.mean(cross_entropy_loss) + torch.mean(
+            cross_entropy_loss1)
         return total_loss
 
 
     # 设置批次大小
-    batch_size = 64
+    batch_size = 1000
 
     # 开始训练过程
     # 开始训练过程
-    for epoch in range(1):  # 运行3个epoch
+    for epoch in range(10):  # 运行3个epoch
         print(f"Starting Epoch {epoch + 1}")
 
         # 将节点划分为多个批次
@@ -422,9 +420,9 @@ if __name__ == '__main__':
             # 遍历当前批次中的每个根节点，构建子图
             for root_node in batch_indices:
                 # 构建正样本子图和恶意子图
-                positive_subgraph = generate_subgraph(root_node, neighbors_dict)
+                positive_subgraph = generate_rwr_subgraph(root_node, neighbors_dict, max_nodes=5, max_hops=3, restart_prob=0.4)
                 malicious_subgraph1, malicious_subgraph2 = generate_negative_samples(
-                    positive_subgraph, root_node, neighbors_dict, adag_model.embeddings, adag_model.embeddings
+                    positive_subgraph, root_node, neighbors_dict, adag_model.features, adag_model.features
                 )
 
                 # 将根节点及对应的子图添加到批次列表中
@@ -434,19 +432,68 @@ if __name__ == '__main__':
                 malicious_subgraphs2.append(malicious_subgraph2)
 
             # 前向传播，处理整个批次
-            positive_outputs_structure, positive_outputs_attribute, malicious_outputs1, malicious_outputs2 = adag_model(
-                root_nodes, positive_subgraphs, malicious_subgraphs1, malicious_subgraphs2
+            pool_score, noise_pool_score, root_score, noise_root_score, malicious_score, positive_pooled_embeddings = adag_model(
+                root_nodes, positive_subgraphs, malicious_subgraphs1
             )
+
+            # 把malicious_subgraphs2的逻辑放到后面
+            # 前向传播，处理整个批次
+            pool_score1, noise_pool_score1, root_score1, pooled_node_score1, malicious_score1, positive_pooled_embeddings1 = adag_model(
+                root_nodes, positive_subgraphs, malicious_subgraphs1
+            )
+
+            # 重点损失
+            # 获取当前批次的实际大小
+            current_batch_size = positive_pooled_embeddings.size(0)  # 这确保 batch_size 取自当前批次
+
+            # subgraph-subgraph contrast loss
+            # subgraph-subgraph contrast loss
+            subgraph_embed = F.normalize(positive_pooled_embeddings, dim=1, p=2)
+            subgraph_embed_hat = F.normalize(positive_pooled_embeddings1, dim=1, p=2)
+
+            # 计算相似性矩阵
+            sim_matrix_one = torch.matmul(subgraph_embed, subgraph_embed_hat.t())
+            sim_matrix_two = torch.matmul(subgraph_embed, subgraph_embed.t())
+            sim_matrix_three = torch.matmul(subgraph_embed_hat, subgraph_embed_hat.t())
+
+            # 设置温度系数
+            temperature = 1.0
+
+            # 计算指数相似性矩阵
+            sim_matrix_one_exp = torch.exp(sim_matrix_one / temperature)
+            sim_matrix_two_exp = torch.exp(sim_matrix_two / temperature)
+            sim_matrix_three_exp = torch.exp(sim_matrix_three / temperature)
+
+            # 动态生成 nega_list，以确保它适配当前批次的大小
+            nega_list = np.arange(0, current_batch_size - 1, 1)
+            nega_list = np.insert(nega_list, 0, current_batch_size - 1)
+
+            # 检查索引是否在范围内
+            sim_row_sum = sim_matrix_one_exp[:, nega_list] + sim_matrix_two_exp[:, nega_list] + sim_matrix_three_exp[:,
+                                                                                                nega_list]
+
+            # 提取对角线元素
+            sim_row_sum = torch.diagonal(sim_row_sum)
+            sim_diag = torch.diagonal(sim_matrix_one)
+
+            # 计算对角线元素的指数
+            sim_diag_exp = torch.exp(sim_diag / temperature)
+
+            # 计算对比损失 (NCE loss)
+            NCE_loss = -torch.log(sim_diag_exp / (sim_row_sum))
+            NCE_loss = torch.mean(NCE_loss)
 
             # 计算批量损失
             batch_loss = compute_loss(
-                positive_outputs_structure, positive_outputs_attribute, malicious_outputs1, malicious_outputs2
+                pool_score, noise_pool_score, root_score, noise_root_score, malicious_score, pool_score1, noise_pool_score1, root_score1, pooled_node_score1, malicious_score1
             )
+            batch_loss =0.1 * NCE_loss +  batch_loss
+
 
             # 执行反向传播和优化步骤
-            optimizer.zero_grad()
+            optimiser.zero_grad()
             batch_loss.backward()
-            optimizer.step()
+            optimiser.step()
 
             # 累积损失并增加批次数量
             total_loss_epoch += batch_loss.item()
@@ -459,63 +506,62 @@ if __name__ == '__main__':
         average_batch_loss = total_loss_epoch / num_batches
         print(f"Epoch {epoch + 1} Completed with Average Batch Loss: {average_batch_loss}")
 
-    # 切换模型到评估模式
-    adag_model.eval()
-
-    # 存储所有节点的预测分数
-    all_structure_scores = []
-    all_attribute_scores = []
-    final_scores = []
-
-    # 遍历所有节点进行预测
-    # 切换模型到评估模式
-    adag_model.eval()
-
-    # 存储所有节点的预测分数
-    # 遍历所有节点进行批量预测
     final_scores = []  # 用于存储所有节点的最终预测分数
-    batch_size = 64  # 根据GPU或CPU的内存情况，可以调整batch_size
 
-    with torch.no_grad():  # 在评估阶段，不需要计算梯度
-        for batch_start in range(0, nb_nodes, batch_size):
-            # 获取当前批次的节点
-            batch_indices = np.arange(batch_start, min(batch_start + batch_size, nb_nodes))
+    # 切换模型到评估模式
+    adag_model.eval()
 
-            # 初始化用于批量处理的列表
-            positive_subgraphs = []
-            root_nodes = []
+    # 禁用梯度计算
+    # 禁用梯度计算
+    with torch.no_grad():
+        # 初始化存储分数的数组，大小为节点总数
+        cumulative_scores = np.zeros(nb_nodes)
+        cumulative_rounds = 0  # 记录有效的轮次数
 
-            # 为每个节点构建正样本子图
-            for root_node in batch_indices:
-                positive_subgraph = generate_subgraph(root_node, neighbors_dict)
-                root_nodes.append(root_node)
-                positive_subgraphs.append(positive_subgraph)
+        for round in range(10):  # 假设 num_rounds 是要执行的轮次数
+            # 生成打乱的节点索引
+            shuffled_indices = np.arange(nb_nodes)
+            np.random.shuffle(shuffled_indices)
 
-            # 使用训练好的 ADAG 模型对当前批次节点进行前向传播，计算结构特征和属性特征的 embedding
-            positive_scores_structure, positive_scores_attribute, _, _ = adag_model(
-                root_nodes, positive_subgraphs, positive_subgraphs, positive_subgraphs
-            )
+            for batch_start in range(0, nb_nodes, batch_size):
+                # 获取当前批次的节点索引
+                batch_indices = shuffled_indices[batch_start:min(batch_start + batch_size, nb_nodes)]
+                current_batch_size = len(batch_indices)
 
-            # 将预测分数转化为列表
-            structure_scores = positive_scores_structure.squeeze().tolist()
-            attribute_scores = positive_scores_attribute.squeeze().tolist()
+                # 初始化批量处理的正样本和恶意样本子图
+                positive_subgraphs = []
+                malicious_subgraphs1 = []
+                root_nodes = []
 
-            # 计算组合后的最终分数
-            for idx in range(len(structure_scores)):
-                combined_score = (structure_scores[idx] + attribute_scores[idx]) / 2
-                final_scores.append(combined_score)
-                # print(f"Node {root_nodes[idx]}: Structure Score = {structure_scores[idx]}, "
-                #       f"Attribute Score = {attribute_scores[idx]}, Combined Score = {combined_score}")
+                # 遍历当前批次中的每个根节点，构建子图
+                for root_node in batch_indices:
+                    # 构建正样本子图和恶意子图
+                    positive_subgraph = generate_rwr_subgraph(root_node, neighbors_dict)
+                    malicious_subgraph1, _ = generate_negative_samples(
+                        positive_subgraph, root_node, neighbors_dict, adag_model.features, adag_model.features
+                    )
 
-    # 将所有预测分数输出为最终结果
-    final_predictions = np.array(final_scores)
+                    # 将根节点及对应的子图添加到批次列表中
+                    root_nodes.append(root_node)
+                    positive_subgraphs.append(positive_subgraph)
+                    malicious_subgraphs1.append(malicious_subgraph1)
 
-    # 获取标签的 numpy 数组
-    true_labels = ano_label.squeeze()
+                # 前向传播，处理当前批次
+                pool_score, noise_pool_score, root_score, noise_root_score, malicious_score, _ = adag_model(
+                    root_nodes, positive_subgraphs, malicious_subgraphs1
+                )
 
-    # 计算 AUC
-    auc_score = roc_auc_score(true_labels, final_predictions)
+                # 使用 squeeze 去掉 root_score 的多余维度，使其与 all_scores 匹配
+                cumulative_scores[batch_indices] += root_score.cpu().numpy().squeeze()[:current_batch_size]
 
-    print(f"AUC Score: {auc_score}")
+            # 每一轮结束后累加轮次数
+            cumulative_rounds += 1
 
-    # 一个是使用MLP网络对每个节点的embedding计分，一个是将这个分数放到前面建立的高斯分布中算。如果大于1，则用margin将它转换为1之间
+        # 在所有轮次结束后，计算最终的平均异常分数
+        final_ano_scores = cumulative_scores / cumulative_rounds
+
+        # 计算 AUC，假设 `ano_label` 是你的标签
+        auc = roc_auc_score(1 - ano_label, final_ano_scores)
+
+        # 输出 AUC
+        print(f'Testing AUC: {auc:.4f}', flush=True)
