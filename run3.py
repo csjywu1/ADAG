@@ -60,7 +60,7 @@ if __name__ == '__main__':
     # 确保 adj_hat 被定义
     adj_hat = normalize_adj(adj)  # 根据您的代码逻辑定义或处理 adj_hat
     adj_hat = (adj_hat + sp.eye(adj.shape[0])).todense()
-    adj_hat = adj_hat.toarray()  # 将 adj_hat 转换为密集矩阵
+    # adj_hat = adj_hat.toarray()  # 将 adj_hat 转换为密集矩阵
 
     # 将数据转换为 PyTorch 格式
     features = torch.FloatTensor(features).to(device)  # 将特征转换为 Tensor
@@ -205,17 +205,19 @@ if __name__ == '__main__':
     neighbors_dict = get_similarity_neighbors(node_embeddings_tensor, top_k=100)
 
 
-    def generate_subgraph(root_node, neighbors_dict, max_nodes=7, max_hops=3, restart_prob=0.6):
-        """ 为每个根节点构建子图，使用DFS，确保子图的联通性 """
+    def generate_subgraph(root_node, neighbors_dict, max_nodes=7, max_hops=3, restart_prob=0.4):
+        """ 从 root_node 开始构建子图，使用DFS，确保子图的联通性，并避免重复使用节点作为新的根节点 """
         G = nx.Graph()
         G.add_node(root_node)
 
-        # 使用栈而不是队列来实现DFS
-        stack = [(root_node, 0)]  # 元素是 (节点, 当前跳数)
-        visited = set([root_node])
+        # 使用栈实现DFS，元素是 (当前节点, 当前跳数, 当前路径)
+        stack = [(root_node, 0, [root_node])]  # 栈的初始值为根节点，初始跳数为0
+        visited = set([root_node])  # 已经访问的节点，避免重复添加
 
         while stack and len(G.nodes) < max_nodes:
-            current_node, current_hop = stack.pop()  # 从栈中取出一个节点和当前跳数
+            current_node, current_hop, path = stack.pop()  # 从栈中取出一个节点、跳数和路径
+
+            # print(f"访问节点: {current_node}, 当前路径: {path}")  # 输出当前访问的节点和路径，调试用
 
             # 检查跳数是否超过最大深度
             if current_hop >= max_hops:
@@ -225,35 +227,41 @@ if __name__ == '__main__':
             neighbors = neighbors_dict.get(current_node, [])
 
             for neighbor in neighbors:
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    G.add_edge(current_node, neighbor)  # 添加当前节点与邻居节点的边
+                # 如果邻居节点没有访问过并且不是当前节点
+                if neighbor not in visited and neighbor != current_node:
+                    visited.add(neighbor)  # 标记该节点已访问
+                    G.add_edge(current_node, neighbor)  # 添加边 (current_node, neighbor)
 
-                    # 确保子图的联通性
+                    # 更新路径
+                    new_path = path + [neighbor]
+
+                    # 确保子图的联通性，达到最大节点数则返回
                     if len(G.nodes) >= max_nodes:
-                        return G  # 立即返回已达到最大节点数的子图
+                        return G  # 返回已达到最大节点数的子图
 
-                    # 决定是否继续从这个邻居进行搜索
-                    if np.random.rand() > restart_prob:  # 如果没有restart，继续从这个邻居进行搜索
-                        stack.append((neighbor, current_hop + 1))  # 将邻居与新的跳数加入栈
+                    # 如果没有触发restart条件，则继续深搜
+                    if np.random.rand() > restart_prob:
+                        stack.append((neighbor, current_hop + 1, new_path))  # 将邻居节点与新的跳数加入栈中
 
-                        # 将新邻居的邻居加入到stack中，确保继续拓展，但要确保不会超出 max_nodes
+                        # 获取邻居的邻居
                         neighbor_neighbors = neighbors_dict.get(neighbor, [])
                         for nn in neighbor_neighbors:
-                            if nn not in visited and len(G.nodes) < max_nodes:
-                                stack.append((nn, current_hop + 2))  # 将nn加入栈，并将跳数+2
-                                G.add_edge(neighbor, nn)  # 确保边 (neighbor, nn) 也被加入到子图 G 中
+                            # 确保邻居的邻居没有访问过，且避免跳回原节点或循环
+                            if nn not in visited and nn != current_node and nn != neighbor and len(G.nodes) < max_nodes:
+                                stack.append((nn, current_hop + 2, new_path + [nn]))  # 将nn加入栈中
+                                G.add_edge(neighbor, nn)  # 添加边 (neighbor, nn)
 
-                                if len(G.nodes) >= max_nodes:  # 确保不超出 max_nodes
+                                if len(G.nodes) >= max_nodes:  # 如果子图已经达到最大节点数，则立即返回
                                     return G
 
-        # 如果子图的节点数量不足 max_nodes，则可以选择复制已有的邻居或随机增加一些节点
+        # 如果子图的节点数量不足 max_nodes，则随机增加一些节点
         while len(G.nodes) < max_nodes:
             existing_nodes = list(G.nodes)
-            node_to_add = np.random.choice(existing_nodes)  # 随机选择一个已有的节点
+            node_to_add = np.random.choice(existing_nodes)  # 随机选择已有的节点
             G.add_node(node_to_add)
 
-        return G
+        return G  # 只返回生成的子图
+
 
     def generate_negative_samples(G, root_node, neighbors_dict, structure_embeddings, attribute_embeddings,
                                   max_nodes=10):
