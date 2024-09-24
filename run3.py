@@ -439,7 +439,7 @@ if __name__ == '__main__':
             # 把malicious_subgraphs2的逻辑放到后面
             # 前向传播，处理整个批次
             pool_score1, noise_pool_score1, root_score1, pooled_node_score1, malicious_score1, positive_pooled_embeddings1 = adag_model(
-                root_nodes, positive_subgraphs, malicious_subgraphs1
+                root_nodes, malicious_subgraphs2, malicious_subgraphs1
             )
 
             # 重点损失
