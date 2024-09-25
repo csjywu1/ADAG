@@ -17,7 +17,7 @@ import torch.nn.functional as F
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ['OMP_NUM_THREADS'] = '1'
 
-parser = argparse.ArgumentParser(description='GRADATE')
+parser = argparse.ArgumentParser(description='ADAG')
 parser.add_argument('--expid', type=int, default=1)
 parser.add_argument('--device', type=str, default='cuda:0')
 parser.add_argument('--dataset', type=str, default='cora')
