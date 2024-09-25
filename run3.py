@@ -117,24 +117,27 @@ if __name__ == '__main__':
         node_embeddings_tensor = load_embeddings(embedding_filename)
     else:
         # 如果文件不存在，生成嵌入并保存
-        node2vec = Node2Vec(G, dimensions=128, walk_length=10, num_walks=100, p=0.25, q=4)
+        node2vec = Node2Vec(G, dimensions=64, walk_length=10, num_walks=100, p=0.25, q=4)
         node_embeddings = node2vec.fit(window=10, min_count=1).wv
         # 转换为 PyTorch Tensor
         node_embeddings_tensor = torch.FloatTensor(node_embeddings.vectors)
         save_embeddings(node_embeddings_tensor, embedding_filename)
 
-    adag_model = ADAG(input_dim=node_embeddings_tensor.shape[1], hidden_dim=128, output_dim=128).to(device)
+    adag_model = ADAG(input_dim=node_embeddings_tensor.shape[1], hidden_dim=64, output_dim=64).to(device)
 
-    optimiser = torch.optim.Adam(adag_model.parameters(), lr=0.001, weight_decay=0.0)
+    optimiser = torch.optim.Adam(adag_model.parameters(), lr=0.0001, weight_decay=0.0)
     b_xent_context = nn.BCEWithLogitsLoss(reduction='none')
 
     # 将 node_embeddings_tensor 赋值给 features，并确保它不参与训练
     adag_model.features = node_embeddings_tensor.to(device)
-    # adag_model.features.requires_grad = False
+    adag_model.features.requires_grad = False
 
     # 初始化 embeddings 为与 node_embeddings_tensor 大小相同的可训练参数
-    adag_model.embeddings = torch.nn.Parameter(torch.Tensor(node_embeddings_tensor.size()).to(device))
-    torch.nn.init.xavier_uniform_(adag_model.embeddings)  # 使用 Xavier 初始化
+    adag_model.embeddings = features
+    # adag_model.embeddings.requires_grad = False
+
+
+
     # 获取相似性邻居集合
     def get_similarity_neighbors(embeddings, top_k=10):
         """ 获取每个节点的相似性邻居集合 """
@@ -157,74 +160,19 @@ if __name__ == '__main__':
     neighbors_dict = get_similarity_neighbors(node_embeddings_tensor, top_k=100)
 
 
-    # def generate_subgraph(root_node, neighbors_dict, max_nodes=5, max_hops=3, restart_prob=0.4):
-    #     """ 从 root_node 开始构建子图，使用DFS，确保子图的联通性，并避免重复使用节点作为新的根节点 """
-    #     G = nx.Graph()
-    #     G.add_node(root_node)
-    #
-    #     # 使用栈实现DFS，元素是 (当前节点, 当前跳数, 当前路径)
-    #     stack = [(root_node, 0, [root_node])]  # 栈的初始值为根节点，初始跳数为0
-    #     visited = set([root_node])  # 已经访问的节点，避免重复添加
-    #
-    #     while stack and len(G.nodes) < max_nodes:
-    #         current_node, current_hop, path = stack.pop()  # 从栈中取出一个节点、跳数和路径
-    #
-    #         # print(f"访问节点: {current_node}, 当前路径: {path}")  # 输出当前访问的节点和路径，调试用
-    #
-    #         # 检查跳数是否超过最大深度
-    #         if current_hop >= max_hops:
-    #             continue
-    #
-    #         # 获取当前节点的邻居
-    #         neighbors = neighbors_dict.get(current_node, [])
-    #
-    #         for neighbor in neighbors:
-    #             # 如果邻居节点没有访问过并且不是当前节点
-    #             if neighbor not in visited and neighbor != current_node:
-    #                 visited.add(neighbor)  # 标记该节点已访问
-    #                 G.add_edge(current_node, neighbor)  # 添加边 (current_node, neighbor)
-    #
-    #                 # 更新路径
-    #                 new_path = path + [neighbor]
-    #
-    #                 # 确保子图的联通性，达到最大节点数则返回
-    #                 if len(G.nodes) >= max_nodes:
-    #                     return G  # 返回已达到最大节点数的子图
-    #
-    #                 # 如果没有触发restart条件，则继续深搜
-    #                 if np.random.rand() > restart_prob:
-    #                     stack.append((neighbor, current_hop + 1, new_path))  # 将邻居节点与新的跳数加入栈中
-    #
-    #                     # 获取邻居的邻居
-    #                     neighbor_neighbors = neighbors_dict.get(neighbor, [])
-    #                     for nn in neighbor_neighbors:
-    #                         # 确保邻居的邻居没有访问过，且避免跳回原节点或循环
-    #                         if nn not in visited and nn != current_node and nn != neighbor and len(G.nodes) < max_nodes:
-    #                             stack.append((nn, current_hop + 2, new_path + [nn]))  # 将nn加入栈中
-    #                             G.add_edge(neighbor, nn)  # 添加边 (neighbor, nn)
-    #
-    #                             if len(G.nodes) >= max_nodes:  # 如果子图已经达到最大节点数，则立即返回
-    #                                 return G
-    #
-    #     # 如果子图的节点数量不足 max_nodes，则随机增加一些节点
-    #     while len(G.nodes) < max_nodes:
-    #         existing_nodes = list(G.nodes)
-    #         node_to_add = np.random.choice(existing_nodes)  # 随机选择已有的节点
-    #         G.add_node(node_to_add)
-    #
-    #     return G  # 只返回生成的子图
-
-    def generate_rwr_subgraph(root_node, neighbors_dict, max_nodes=5, max_hops=3, restart_prob=0.4):
+    def generate_subgraph(root_node, neighbors_dict, max_nodes=5, max_hops=3, restart_prob=0.4):
         """ 从 root_node 开始构建子图，使用DFS，确保子图的联通性，并避免重复使用节点作为新的根节点 """
         G = nx.Graph()
         G.add_node(root_node)
 
-        # 使用栈实现DFS，元素是 (当前节点, 当前跳数)
-        stack = [(root_node, 0)]  # 栈的初始值为根节点，初始跳数为0
+        # 使用栈实现DFS，元素是 (当前节点, 当前跳数, 当前路径)
+        stack = [(root_node, 0, [root_node])]  # 栈的初始值为根节点，初始跳数为0
         visited = set([root_node])  # 已经访问的节点，避免重复添加
 
         while stack and len(G.nodes) < max_nodes:
-            current_node, current_hop = stack.pop()  # 从栈中取出一个节点和跳数
+            current_node, current_hop, path = stack.pop()  # 从栈中取出一个节点、跳数和路径
+
+            # print(f"访问节点: {current_node}, 当前路径: {path}")  # 输出当前访问的节点和路径，调试用
 
             # 检查跳数是否超过最大深度
             if current_hop >= max_hops:
@@ -235,9 +183,12 @@ if __name__ == '__main__':
 
             for neighbor in neighbors:
                 # 如果邻居节点没有访问过并且不是当前节点
-                if neighbor not in visited:
+                if neighbor not in visited and neighbor != current_node:
                     visited.add(neighbor)  # 标记该节点已访问
                     G.add_edge(current_node, neighbor)  # 添加边 (current_node, neighbor)
+
+                    # 更新路径
+                    new_path = path + [neighbor]
 
                     # 确保子图的联通性，达到最大节点数则返回
                     if len(G.nodes) >= max_nodes:
@@ -245,7 +196,18 @@ if __name__ == '__main__':
 
                     # 如果没有触发restart条件，则继续深搜
                     if np.random.rand() > restart_prob:
-                        stack.append((neighbor, current_hop + 1))  # 将邻居节点与新的跳数加入栈中
+                        stack.append((neighbor, current_hop + 1, new_path))  # 将邻居节点与新的跳数加入栈中
+
+                        # 获取邻居的邻居
+                        neighbor_neighbors = neighbors_dict.get(neighbor, [])
+                        for nn in neighbor_neighbors:
+                            # 确保邻居的邻居没有访问过，且避免跳回原节点或循环
+                            if nn not in visited and nn != current_node and nn != neighbor and len(G.nodes) < max_nodes:
+                                stack.append((nn, current_hop + 2, new_path + [nn]))  # 将nn加入栈中
+                                G.add_edge(neighbor, nn)  # 添加边 (neighbor, nn)
+
+                                if len(G.nodes) >= max_nodes:  # 如果子图已经达到最大节点数，则立即返回
+                                    return G
 
         # 如果子图的节点数量不足 max_nodes，则随机增加一些节点
         while len(G.nodes) < max_nodes:
@@ -254,6 +216,47 @@ if __name__ == '__main__':
             G.add_node(node_to_add)
 
         return G  # 只返回生成的子图
+
+    # def generate_rwr_subgraph(root_node, neighbors_dict, max_nodes=5, max_hops=3, restart_prob=0.4):
+    #     """ 从 root_node 开始构建子图，使用DFS，确保子图的联通性，并避免重复使用节点作为新的根节点 """
+    #     G = nx.Graph()
+    #     G.add_node(root_node)
+    #
+    #     # 使用栈实现DFS，元素是 (当前节点, 当前跳数)
+    #     stack = [(root_node, 0)]  # 栈的初始值为根节点，初始跳数为0
+    #     visited = set([root_node])  # 已经访问的节点，避免重复添加
+    #
+    #     while stack and len(G.nodes) < max_nodes:
+    #         current_node, current_hop = stack.pop()  # 从栈中取出一个节点和跳数
+    #
+    #         # 检查跳数是否超过最大深度
+    #         if current_hop >= max_hops:
+    #             continue
+    #
+    #         # 获取当前节点的邻居
+    #         neighbors = neighbors_dict.get(current_node, [])
+    #
+    #         for neighbor in neighbors:
+    #             # 如果邻居节点没有访问过并且不是当前节点
+    #             if neighbor not in visited:
+    #                 visited.add(neighbor)  # 标记该节点已访问
+    #                 G.add_edge(current_node, neighbor)  # 添加边 (current_node, neighbor)
+    #
+    #                 # 确保子图的联通性，达到最大节点数则返回
+    #                 if len(G.nodes) >= max_nodes:
+    #                     return G  # 返回已达到最大节点数的子图
+    #
+    #                 # 如果没有触发restart条件，则继续深搜
+    #                 if np.random.rand() > restart_prob:
+    #                     stack.append((neighbor, current_hop + 1))  # 将邻居节点与新的跳数加入栈中
+    #
+    #     # 如果子图的节点数量不足 max_nodes，则随机增加一些节点
+    #     while len(G.nodes) < max_nodes:
+    #         existing_nodes = list(G.nodes)
+    #         node_to_add = np.random.choice(existing_nodes)  # 随机选择已有的节点
+    #         G.add_node(node_to_add)
+    #
+    #     return G  # 只返回生成的子图
 
 
     def generate_negative_samples(G, root_node, neighbors_dict, structure_embeddings, attribute_embeddings,
@@ -369,6 +372,7 @@ if __name__ == '__main__':
         cross_entropy_loss = b_xent_context(scores, labels)
         cross_entropy_loss1 = b_xent_context(scores_1_hat, labels)
 
+
         # --- 打印各部分的损失值（调试用） ---
         print(f"Cross Entropy Loss: {torch.mean(cross_entropy_loss).item()}")  # 取均值
 
@@ -393,7 +397,7 @@ if __name__ == '__main__':
 
 
     # 设置批次大小
-    batch_size = 1000
+    batch_size = 300
 
     # 开始训练过程
     # 开始训练过程
@@ -409,7 +413,12 @@ if __name__ == '__main__':
 
         for batch_start in range(0, nb_nodes, batch_size):
             # 获取当前批次的节点
+            # 执行反向传播和优化步骤
+            optimiser.zero_grad()
             batch_indices = indices[batch_start:batch_start + batch_size]
+
+            # 打乱当前批次的节点顺序
+            random.shuffle(batch_indices)
 
             # 初始化用于批量处理的列表
             positive_subgraphs = []
@@ -420,7 +429,8 @@ if __name__ == '__main__':
             # 遍历当前批次中的每个根节点，构建子图
             for root_node in batch_indices:
                 # 构建正样本子图和恶意子图
-                positive_subgraph = generate_rwr_subgraph(root_node, neighbors_dict, max_nodes=5, max_hops=3, restart_prob=0.4)
+                positive_subgraph = generate_subgraph(root_node, neighbors_dict, max_nodes=5, max_hops=3,
+                                                      restart_prob=0.4)
                 malicious_subgraph1, malicious_subgraph2 = generate_negative_samples(
                     positive_subgraph, root_node, neighbors_dict, adag_model.features, adag_model.features
                 )
@@ -490,8 +500,7 @@ if __name__ == '__main__':
             batch_loss =0.1 * NCE_loss +  batch_loss
 
 
-            # 执行反向传播和优化步骤
-            optimiser.zero_grad()
+
             batch_loss.backward()
             optimiser.step()
 
@@ -536,7 +545,7 @@ if __name__ == '__main__':
                 # 遍历当前批次中的每个根节点，构建子图
                 for root_node in batch_indices:
                     # 构建正样本子图和恶意子图
-                    positive_subgraph = generate_rwr_subgraph(root_node, neighbors_dict)
+                    positive_subgraph = generate_subgraph(root_node, neighbors_dict)
                     malicious_subgraph1, _ = generate_negative_samples(
                         positive_subgraph, root_node, neighbors_dict, adag_model.features, adag_model.features
                     )
