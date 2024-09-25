@@ -2,13 +2,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class MLP(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(MLP, self).__init__()
         self.fc = nn.Linear(input_dim, output_dim)
 
     def forward(self, x):
-        return self.fc(x.clone()) 
+        return self.fc(x.clone())  # 使用 clone 避免就地操作
+
 
 class SimpleMLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim):
@@ -21,13 +23,14 @@ class SimpleMLP(nn.Module):
         x = self.fc2(x)
         return x
 
+
 class GCN(nn.Module):
 
     def __init__(self, in_ft, out_ft, act, bias=True):
         super(GCN, self).__init__()
         self.fc = nn.Linear(in_ft, out_ft, bias=False)
         self.act = nn.PReLU() if act == 'prelu' else act
-        
+
         if bias:
             self.bias = nn.Parameter(torch.FloatTensor(out_ft))
             self.bias.data.fill_(0.0)
@@ -44,15 +47,16 @@ class GCN(nn.Module):
                 m.bias.data.fill_(0.0)
 
     def forward(self, seq, adj, sparse=False):
-        seq_fts = self.fc(seq)  # embeddings转换的地方。Linear transformation of node embeddings
+        seq_fts = self.fc(seq)
         if sparse:
             out = torch.unsqueeze(torch.spmm(adj, torch.squeeze(seq_fts, 0)), 0)
         else:
             out = torch.bmm(adj, seq_fts)
         if self.bias is not None:
             out += self.bias
-        
+
         return self.act(out)
+
 
 class AvgReadout(nn.Module):
 
@@ -62,13 +66,15 @@ class AvgReadout(nn.Module):
     def forward(self, seq):
         return torch.mean(seq, 1)
 
+
 class MaxReadout(nn.Module):
 
     def __init__(self):
         super(MaxReadout, self).__init__()
 
     def forward(self, seq):
-        return torch.max(seq,1).values
+        return torch.max(seq, 1).values
+
 
 class MinReadout(nn.Module):
 
@@ -78,19 +84,21 @@ class MinReadout(nn.Module):
     def forward(self, seq):
         return torch.min(seq, 1).values
 
+
 class WSReadout(nn.Module):
 
     def __init__(self):
         super(WSReadout, self).__init__()
 
     def forward(self, seq, query):
-        query = query.permute(0,2,1)
-        sim = torch.matmul(seq,query)
-        sim = F.softmax(sim,dim=1)
+        query = query.permute(0, 2, 1)
+        sim = torch.matmul(seq, query)
+        sim = F.softmax(sim, dim=1)
         sim = sim.repeat(1, 1, 64)
-        out = torch.mul(seq,sim)
-        out = torch.sum(out,1)
+        out = torch.mul(seq, sim)
+        out = torch.sum(out, 1)
         return out
+
 
 class Contextual_Discriminator(nn.Module):
 
@@ -126,6 +134,7 @@ class Contextual_Discriminator(nn.Module):
         logits = torch.cat(tuple(scs))
         return logits
 
+
 class Patch_Discriminator(nn.Module):
 
     def __init__(self, n_h, negsamp_round):
@@ -151,6 +160,7 @@ class Patch_Discriminator(nn.Module):
         logits = torch.cat(tuple(scs))
         return logits
 
+
 class Model(nn.Module):
 
     def __init__(self, n_in, n_h, activation, negsamp_round_patch, negsamp_round_context, readout, args):
@@ -172,18 +182,16 @@ class Model(nn.Module):
 
         self.mlp_combine = SimpleMLP(input_dim=2 * args.embedding_dim, hidden_dim=args.embedding_dim,
                                      output_dim=args.embedding_dim)
+        # 定义可优化的噪声向量
         self.single_noise = nn.Parameter(torch.randn(1, args.embedding_dim))  # [1, 64]
 
+        # 新的MLP模块用于降维
         self.mlp_combine = SimpleMLP(input_dim=2 * args.embedding_dim, hidden_dim=args.embedding_dim,
                                      output_dim=args.embedding_dim)
         self.mlp_noise = MLP(args.embedding_dim, args.embedding_dim)
 
-        # # 初始化节点的embedding矩阵
-        # self.embeddings = nn.Parameter(torch.randn(args.num_nodes, args.embedding_dim),
-        #                                requires_grad=True)  # 假设 args.num_nodes 是图中的节点数量
-
     def forward(self, seq1, adj, sparse=False, msk=None, samp_bias1=None, samp_bias2=None):
-        h_1 = self.gcn_context(seq1, adj, sparse) # 这里是拿整个图来处理，而不是单个子图
+        h_1 = self.gcn_context(seq1, adj, sparse)
         h_2 = self.gcn_patch(seq1, adj, sparse)
 
         if self.read_mode != 'weighted_sum':
@@ -192,15 +200,22 @@ class Model(nn.Module):
             h_unano = h_2[:, -1, :]
             h_ano = h_2[:, -2, :]
 
-            noise = self.single_noise.expand(h_1.size(0), -1)
+            # WU: 加入噪声
+            noise = self.single_noise.expand(h_1.size(0), -1)  # [300, 64]
 
-            processed_noise = self.mlp_noise(noise)
-            combined = c + processed_noise
+            processed_noise = self.mlp_noise(noise)  # [300, 64]
 
-            concatenated = torch.cat((combined, c), dim=1)
-            combined_reduced = self.mlp_combine(concatenated)
+            # 将processed_noise乘以权重0.1后加到c上
+            combined = c + processed_noise  # [300, 64]
+
+            # 拼接combined和c，得到[300, 128]
+            concatenated = torch.cat((combined, c), dim=1)  # [300, 128]
+
+            # 使用MLP将维度降到64
+            combined_reduced = self.mlp_combine(concatenated)  # [300, 64]
 
             c2 = combined_reduced
+            #
         else:
             c = self.read(h_1[:, :-1, :], h_1[:, -2:-1, :])
             h_mv = h_1[:, -1, :]
